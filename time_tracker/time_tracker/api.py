@@ -155,7 +155,7 @@ def finalize_timesheet_with_screenshots():
 
         task_name = payload.get("task_name")
         project_name = payload.get("project_name")
-        activity_name = payload.get("activity_name") or "Misc"
+        activity_name = payload.get("activity_name")
         intervals = payload.get("intervals", [])
 
         timesheet = frappe.get_doc("Timesheet", timesheet_name)
@@ -174,11 +174,12 @@ def finalize_timesheet_with_screenshots():
                 continue
 
             # Ensure Activity Type exists
-            if not frappe.get_all("Activity Type", filters={"activity_type": activity_name}):
+            if not frappe.db.exists("Activity Type", activity_name):
                 frappe.get_doc({
                     "doctype": "Activity Type",
                     "activity_type": activity_name
                 }).insert(ignore_permissions=True)
+                
                 frappe.log_error(title="Activity Created",
                                  message=f"Created Activity Type '{activity_name}'")
 
@@ -196,22 +197,52 @@ def finalize_timesheet_with_screenshots():
 
         timesheet.save(ignore_permissions=True)
 
-        #--------------Attach screenshots to timesheet----------------
+         #--------------Attach screenshots to timesheet IF FLAG EXISTS & TRUE----------------
         session_id = payload.get("session_id")
-        if session_id:
-            upload_files = frappe.get_all(
-                "File",
-                filters={"custom_session_id": session_id },
-                fields=["name"]
-            )
-            for file in upload_files:
-                frappe.db.set_value("File",file["name"],"attached_to_doctype","Timesheet")
-                frappe.db.set_value("File",file["name"],"attached_to_name",timesheet_name)
-            frappe.db.commit()
+        try:
+            include_screenshots = False
+            # Safely check the Timesheet field — if it doesn't exist treat as False
+            try:
+                include_screenshots = bool(timesheet.custom_include_screenshots)
+            except Exception:
+                include_screenshots = False
+
+            if session_id:
+                if include_screenshots:
+                    upload_files = frappe.get_all(
+                        "File",
+                        filters={"custom_session_id": session_id},
+                        fields=["name"]
+                    )
+                    for file in upload_files:
+                        # only attach if not already attached
+                        try:
+                            current = frappe.db.get_value("File", file["name"], ["attached_to_doctype", "attached_to_name"], as_dict=True) or {}
+                            if not current.get("attached_to_doctype") and not current.get("attached_to_name"):
+                                frappe.db.set_value("File", file["name"], "attached_to_doctype", "Timesheet")
+                                frappe.db.set_value("File", file["name"], "attached_to_name", timesheet_name)
+                        except Exception as e:
+                            frappe.log_error(title="Attach Screenshot Error",
+                                             message=f"Failed to attach {file['name']} to {timesheet_name}: {str(e)}\nTraceback:\n{frappe.get_traceback()}")
+
+                else:
+                    # If include_screenshots is False or not present, cleanup unlinked session files
+                    try:
+                        cleanup_session(session_id)
+                    except Exception as ce:
+                        frappe.log_error(title="Cleanup on finalize failed",
+                                         message=f"session_id: {session_id}\n{str(ce)}\nTraceback:\n{frappe.get_traceback()}")
+        except Exception as e:
+            # log but don't block finalization of timesheet rows
+            frappe.log_error(title="Screenshots Attach/Cleanup Error",
+                             message=f"Error while handling screenshots for session {session_id}: {str(e)}\nTraceback:\n{frappe.get_traceback()}")
+
         #-------------------------------------------------------------
 
         frappe.log_error(title="Timesheet Updated",
                          message=f"Timesheet '{timesheet_name}' updated successfully. {rows_added} intervals added.")
+        
+        frappe.db.commit()
 
         # return the full url for frontend
         timesheet_url = frappe.utils.get_url_to_form("Timesheet", timesheet_name)
@@ -231,14 +262,16 @@ def cleanup_session(session_id):
         # Only delete files not attached to any doctype
         files = frappe.get_all(
             "File",
-            filters={"custom_session_id": session_id},
-            fields=["name","attached_to_name", "attached_to_doctype"]
+            filters={"custom_session_id": session_id,
+                     "attached_to_doctype": None,
+                     "attached_to_name": None
+                     },
+            fields=["name"]
         )
         deleted_count = 0
         for file in files:
-            if not file.get("attached_to_doctype") and not file.get("attached_to_name"):
-                frappe.delete_doc("File", file["name"], ignore_permissions=True)
-                deleted_count += 1
+            frappe.db.delete("File", file["name"])
+            deleted_count += 1
 
         frappe.log_error(
             title="Cleanup Session",
