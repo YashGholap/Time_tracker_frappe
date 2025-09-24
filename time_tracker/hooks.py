@@ -242,3 +242,6 @@ app_license = "mit"
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
 
+# override_doctype_class = {
+#     "Task": "time_tracker.time_tracker.doctype.task.task.CustomTask"
+# }
