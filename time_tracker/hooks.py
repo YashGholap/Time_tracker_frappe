@@ -245,3 +245,7 @@ app_license = "mit"
 # override_doctype_class = {
 #     "Task": "time_tracker.time_tracker.doctype.task.task.CustomTask"
 # }
+
+doctype_js = {
+    "Timesheet": "public/js/default_billable.js"
+}
