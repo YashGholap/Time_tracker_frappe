@@ -15,6 +15,43 @@ def parse_datetime_naive(dt_str):
     # Remove timezone info to make it naive
     return dt.replace(tzinfo=None)
 
+
+@frappe.whitelist()
+def get_user_first_name():
+    """
+    Retrieves the first name of the currently logged-in user.
+    """
+    # 1. Get the current user ID (which is usually the email or User name)
+    user_id = frappe.session.user
+
+    # Handle the 'Guest' user case
+    if user_id == 'Guest':
+        return 'User'
+
+    try:
+        # 2. Fetch the User document
+        # We only select the 'first_name' field to keep the query fast
+        first_name = frappe.db.get_value("User", user_id, "first_name")
+
+        if first_name:
+            # 3. Return the first name
+            return first_name
+        else:
+            # Fallback: If 'first_name' is empty in the User document,
+            # you can try to parse the 'full_name' or the user_id itself.
+            full_name = frappe.db.get_value("User", user_id, "full_name")
+            if full_name:
+                # Return the first word of the full name
+                return full_name.split(' ')[0]
+            
+            # Final fallback, return 'User'
+            return 'User'
+
+    except Exception as e:
+        frappe.log_error(title="Failed to fetch user name", message=str(e))
+        return 'User'
+
+
 @frappe.whitelist()
 def get_projects():
     """
